@@ -1,0 +1,219 @@
+<?php
+
+namespace App\WalletModule\Transaction;
+
+use App\Models\Transaction;
+use App\Models\Wallet;
+use App\WalletModule\Exceptions\IncompactibleWalletsException;
+use App\WalletModule\Exceptions\InsufficientBalanceException;
+use App\WalletModule\Facades\Walletable;
+use App\WalletModule\Internals\Actions\ActionData;
+use App\WalletModule\Internals\Lockers\LockerInterface;
+use App\WalletModule\Money\Money;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+class Transfer
+{
+    /**
+     * Sender wallet
+     *
+     * @var \App\Models\Wallet
+     */
+    protected $sender;
+
+    /**
+     * Receiver wallet
+     *
+     * @var \App\Models\Wallet
+     */
+    protected $receiver;
+
+    /**
+     * Amount to transfer
+     *
+     * @var \App\WalletModule\Money\Money
+     */
+    protected $amount;
+
+    /**
+     * Trasanction bads
+     *
+     * @var \App\WalletModule\Transaction\TransactionBag
+     */
+    protected $bag;
+
+    /**
+     * Transfer status
+     *
+     * @var bool
+     */
+    protected $successful = false;
+
+    /**
+     * Note added to the transfer
+     *
+     * @var string|null
+     */
+    protected $remarks;
+
+    /**
+     * The session id of the transfer
+     *
+     * @var bool
+     */
+    protected $session;
+
+    /**
+     * The transfer locker
+     *
+     * @var \App\WalletModule\Internals\Lockers\OptimisticLocker
+     */
+    protected $locker;
+
+    public function __construct(Wallet $sender, Money $amount, Wallet $receiver, string $remarks = null)
+    {
+        $this->sender = $sender;
+        $this->receiver = $receiver;
+        $this->amount = $amount;
+        $this->remarks = $remarks;
+        $this->session = Str::uuid();
+        $this->bag = new TransactionBag();
+    }
+
+    /**
+     * Execute the transfer
+     *
+     * @return self
+     */
+    public function execute(): self
+    {
+        $this->checks();
+
+        try {
+            DB::beginTransaction();
+
+            if ($this->debitSender()) {
+                $transaction = $this->bag->new($this->receiver, [
+                    'type' => 'credit',
+                    'session' => $this->session,
+                    'remarks' => $this->remarks
+                ]);
+
+                if ($this->locker()->creditLock($this->receiver, $this->amount, $transaction)) {
+                    $this->successful = true;
+
+                    Walletable::applyAction('transfer', $this->bag, new ActionData(
+                        $this->sender,
+                        $this->receiver
+                    ));
+                    $this->bag->each(function ($item) {
+                        $item->forceFill([
+                            'created_at' => now()
+                        ])->save();
+                    });
+                }
+            }
+
+            DB::commit();
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            throw $th;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Debit the sender
+     */
+    protected function debitSender()
+    {
+        $transaction = $this->bag->new($this->sender, [
+            'type' => 'debit',
+            'session' => $this->session,
+            'remarks' => $this->remarks
+        ]);
+
+        if ($this->locker()->debitLock($this->sender, $this->amount, $transaction)) {
+            return true;
+        }
+    }
+
+    /**
+     * Run some compulsory checks
+     *
+     * @return void
+     */
+    protected function checks()
+    {
+        if ($this->sender->amount->lessThan($this->amount)) {
+            throw new InsufficientBalanceException($this->sender, $this->amount);
+        }
+
+        if (!$this->sender->compactible($this->receiver)) {
+            throw new IncompactibleWalletsException($this->sender, $this->receiver);
+        }
+    }
+
+    /**
+     * Get transaction bag
+     *
+     * @return \App\WalletModule\Transaction\TransactionBag
+     */
+    public function getTransactions(): TransactionBag
+    {
+        return $this->bag;
+    }
+
+    /**
+     * Get the senders transaction
+     *
+     * @return Transaction
+     */
+    public function out(): Transaction
+    {
+        return $this->bag->where('type', 'debit')->first();
+    }
+
+    /**
+     * Get the reciepient`s transaction
+     *
+     * @return Transaction
+     */
+    public function in(): Transaction
+    {
+        return $this->bag->where('type', 'credit')->first();
+    }
+
+    /**
+     * Get amount
+     *
+     * @return \App\WalletModule\Money\Money
+     */
+    public function getAmount(): Money
+    {
+        return $this->amount;
+    }
+
+    /**
+     * Get the locker for the transfer
+     */
+    protected function locker(): LockerInterface
+    {
+        if ($this->locker) {
+            return $this->locker;
+        }
+        return $this->locker = Walletable::locker(config('walletable.locker'));
+    }
+
+    /**
+     * Check is the transfer was successful
+     *
+     * @return boolean
+     */
+    public function successful(): bool
+    {
+        return $this->successful;
+    }
+}

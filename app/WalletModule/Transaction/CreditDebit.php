@@ -1,0 +1,270 @@
+<?php
+
+namespace App\WalletModule\Transaction;
+
+use App\Models\Wallet;
+use App\WalletModule\Events\ConfirmedTransaction;
+use App\WalletModule\Events\CreatedTransaction;
+use App\WalletModule\Exceptions\InsufficientBalanceException;
+use App\WalletModule\Facades\Walletable;
+use App\WalletModule\Internals\Actions\ActionData;
+use App\WalletModule\Internals\Actions\ActionInterface;
+use App\WalletModule\Internals\Lockers\LockerInterface;
+use App\WalletModule\Money\Money;
+use Exception;
+use Illuminate\Support\Facades\App;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use InvalidArgumentException;
+
+class CreditDebit
+{
+    /**
+     * Transaction type
+     *
+     * @var string
+     */
+    protected $type;
+
+    /**
+     * Sender wallet
+     *
+     * @var \App\Models\Wallet
+     */
+    protected $wallet;
+
+    /**
+     * Amount to transfer
+     *
+     * @var \App\WalletModule\Money\Money
+     */
+    protected $amount;
+
+    /**
+     * Trasanction bads
+     *
+     * @var \App\WalletModule\Transaction\TransactionBag
+     */
+    protected $bag;
+
+    /**
+     * Transfer status
+     *
+     * @var bool
+     */
+    protected $successful = false;
+
+    /**
+     * Title of the
+     *
+     * @var string|null
+     */
+    protected $title;
+
+    /**
+     * Note added to the transfer
+     *
+     * @var string|null
+     */
+    protected $remarks;
+
+    /**
+     * The session id of the transfer
+     *
+     * @var bool
+     */
+    protected $session;
+
+    /**
+     * The transfer locker
+     *
+     * @var \App\WalletModule\Internals\Lockers\OptimisticLocker
+     */
+    protected $locker;
+
+    /**
+     * Action of the transaction
+     *
+     * @var \App\WalletModule\Internals\Actions\ActionInterface
+     */
+    protected $action;
+
+    /**
+     * Action of the transaction
+     *
+     * @var \App\WalletModule\Internals\Actions\ActionData
+     */
+    protected $actionData;
+
+    /**
+     * Execution Options
+     *
+     * @var array
+     */
+    protected $options;
+
+    public function __construct(
+        string $type,
+        Wallet $wallet,
+        Money $amount,
+        string|null $title = null,
+        string|null $remarks = null,
+        LockerInterface|null $locker = null,
+        array $options = []
+    ) {
+        if (!in_array($type, ['credit', 'debit'])) {
+            throw new InvalidArgumentException('Argument 1 value can only be "credit" or "debit"');
+        }
+
+        $this->type = $type;
+        $this->wallet = $wallet;
+        $this->amount = $amount;
+        $this->title = $title;
+        $this->remarks = $remarks;
+        $this->locker = $locker;
+        $this->options = $options;
+        $this->session = Str::uuid();
+        $this->bag = new TransactionBag();
+    }
+
+    /**
+     * Execute the transfer
+     *
+     * @return self
+     */
+    public function execute(): self
+    {
+        $this->checks();
+        $locker = $this->locker();
+        $transaction = $this->bag->new($this->wallet, [
+            'type' => $this->type,
+            'session' => $this->session,
+            'remarks' => $this->remarks
+        ]);
+        $shouldInitiateTransaction = $locker->shouldInitiateTransaction($this->wallet, $this->amount, $transaction) ||
+            ($this->options['should_initiate_transaction'] ?? false);
+
+        try {
+            $method = $this->type . 'Lock';
+            $action = $this->action ?? Walletable::action('credit_debit');
+
+            if (!$action->{'support' . ucfirst($this->type)}()) {
+                throw new Exception('This action does not support ' . $this->type . ' operations', 1);
+            }
+
+            if ($shouldInitiateTransaction) {
+                DB::beginTransaction();
+            }
+
+            if ($this->locker()->$method($this->wallet, $this->amount, $transaction)) {
+                $this->successful = true;
+
+                Walletable::applyAction(
+                    $action,
+                    $this->bag,
+                    $this->actionData ?? new ActionData(
+                        $this->wallet,
+                        $this->title
+                    )
+                );
+
+                $this->bag->each(function ($item) {
+                    $item->forceFill([
+                        'confirmed' => true,
+                        'confirmed_at' => now(),
+                        'created_at' => now(),
+                    ])->save();
+                });
+                App::make('events')->dispatch(new ConfirmedTransaction(
+                    $transaction
+                ));
+                App::make('events')->dispatch(new CreatedTransaction(
+                    $transaction
+                ));
+            }
+
+            if ($shouldInitiateTransaction) {
+                DB::commit();
+            }
+        } catch (\Throwable $th) {
+            if ($shouldInitiateTransaction) {
+                DB::rollBack();
+            }
+            throw $th;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Run some compulsory checks
+     *
+     * @return void
+     */
+    protected function checks()
+    {
+        if (
+            $this->type === 'debit' &&
+            $this->wallet->amount->lessThan($this->amount)
+        ) {
+            throw new InsufficientBalanceException($this->wallet, $this->amount);
+        }
+    }
+
+    /**
+     * Get transaction bag
+     *
+     * @return \Walletable\Transaction\TransactionBag
+     */
+    public function getTransactions(): TransactionBag
+    {
+        return $this->bag;
+    }
+
+    /**
+     * Get amount
+     *
+     * @return \App\WalletModule\Money\Money
+     */
+    public function getAmount(): Money
+    {
+        return $this->amount;
+    }
+
+    /**
+     * Set the action for the transaction
+     *
+     * @param \App\WalletModule\Internals\Actions\ActionInterface|string $action
+     * @param \App\WalletModule\Internals\Actions\ActionData $actionData
+     *
+     * @return self
+     */
+    public function setAction($action, ActionData $actionData): self
+    {
+        if (!is_string($action) && !($action instanceof ActionInterface)) {
+            throw new InvalidArgumentException(
+                sprintf('Argument 1 must be of type %s or String', ActionInterface::class)
+            );
+        }
+
+        if (is_string($action)) {
+            $action = Walletable::action($action);
+        }
+
+        $this->action = $action;
+        $this->actionData = $actionData;
+
+        return $this;
+    }
+
+    /**
+     * Get the locker for the transfer
+     */
+    protected function locker(): LockerInterface
+    {
+        if ($this->locker) {
+            return $this->locker;
+        }
+        return $this->locker = Walletable::locker(config('walletable.locker'));
+    }
+}

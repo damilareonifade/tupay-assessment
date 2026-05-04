@@ -1,0 +1,83 @@
+<?php
+
+namespace App\WalletModule\Transaction;
+
+use App\Models\Transaction;
+use App\Models\Wallet;
+use App\WalletModule\Internals\Actions\ActionData;
+use App\WalletModule\Internals\Actions\ActionInterface;
+
+class CreditDebitAction implements ActionInterface
+{
+    /**
+     * {@inheritdoc}
+     */
+    public function apply(Transaction $transaction, ActionData $data)
+    {
+        $data->argument(0)->isA(Wallet::class);
+
+        $title = $data->argument(1)->type('string')->value(
+            $transaction->type === 'credit' ? 'Credit' : 'Debit'
+        );
+
+        $transaction->forceFill([
+            'action' => 'credit_debit'
+        ])->meta('title', $title);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function title(Transaction $transaction)
+    {
+        return $transaction->meta('title');
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function image(Transaction $transaction)
+    {
+        return null;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportDebit(): bool
+    {
+        return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function supportCredit(): bool
+    {
+        return true;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function reversable(Transaction $transaction): bool
+    {
+        return false;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function reverse(Transaction $transaction, Transaction $new): ActionInterface
+    {
+        return $this;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function methodResource(Transaction $transaction)
+    {
+        return null;
+    }
+}
