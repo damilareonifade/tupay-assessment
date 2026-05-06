@@ -232,35 +232,4 @@ class Wallet extends Model implements WalletInterface
         );
     }
 
-    /**
-     * Handle dynamic calls into macros or pass missing methods to the parrent.
-     *
-     * @param  string  $method
-     * @param  array  $parameters
-     * @return mixed
-     */
-    public function __call($method, $parameters)
-    {
-        if (static::hasMacro($method)) {
-            return $this->macroCall($method, $parameters);
-        }
-
-        return parent::__call($method, $parameters);
-    }
-
-    /**
-     * Handle dynamic static calls into macros or pass missing methods to the parrent.
-     *
-     * @param  string  $method
-     * @param  array  $parameters
-     * @return mixed
-     */
-    public static function __callStatic($method, $parameters)
-    {
-        if (static::hasMacro($method)) {
-            return static::macroCallStatic($method, $parameters);
-        }
-
-        return parent::__callStatic($method, $parameters);
-    }
 }
