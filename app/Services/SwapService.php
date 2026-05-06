@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\User;
 use App\Models\Wallet;
 use App\WalletModule\Exceptions\InsufficientBalanceException;
+use App\WalletModule\Money\Money;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -13,7 +14,9 @@ class SwapService
     /** Redis lock TTL in seconds — long enough to cover one DB transaction. */
     private const LOCK_TTL = 30;
 
-    public function __construct(private readonly ExchangeRateService $rates) {}
+    public function __construct(private readonly ExchangeRateService $rates)
+    {
+    }
 
     /**
      * Atomically swap NGN for CNY for the given user.
@@ -28,7 +31,7 @@ class SwapService
     {
         $lock = Cache::store('redis')->lock("swap:{$user->id}", self::LOCK_TTL);
 
-        if (! $lock->get()) {
+        if (!$lock->get()) {
             throw new \RuntimeException('A swap is already in progress for this account. Please try again shortly.');
         }
 
@@ -37,12 +40,12 @@ class SwapService
                 $ngnWallet = $user->ngnWallet();
                 $cnyWallet = $user->cnyWallet();
 
-                if (! $ngnWallet || ! $cnyWallet) {
+                if (!$ngnWallet || !$cnyWallet) {
                     throw new \RuntimeException('User wallets not found.');
                 }
 
                 if ($ngnWallet->getRawOriginal('amount') < $ngnSubunits) {
-                    throw new InsufficientBalanceException('Insufficient NGN balance.');
+                    throw new InsufficientBalanceException($ngnWallet, new Money($ngnSubunits, $ngnWallet->currency));
                 }
 
                 $rate = $this->rates->getRate('NGN', 'CNY');
