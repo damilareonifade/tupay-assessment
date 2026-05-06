@@ -9,18 +9,16 @@ class ConfirmedTransaction
 {
     use SerializesModels;
 
-
     /**
      * The owner of the created wallet.
      *
-     * @var \App\Models\Transaction
+     * @var Transaction
      */
     public $transaction;
 
     /**
      * Create a new event instance.
      *
-     * @param  \App\Models\Transaction  $transaction
      *
      * @return void
      */

@@ -21,8 +21,8 @@ class CreateTransactionsTable extends Migration
     public function up()
     {
         Schema::create($this->tableName, function (Blueprint $table) {
-            $table->id();
-            $table->unsignedBigInteger('wallet_id')->index();
+            $table->ulid('id')->primary();
+            $table->ulid('wallet_id')->index();
             $table->string('session', 100)->index();
             $table->enum('type', ['credit', 'debit'])->index();
             $table->unsignedBigInteger('amount');
@@ -32,7 +32,7 @@ class CreateTransactionsTable extends Migration
             $table->string('method_id', 100)->nullable();
             $table->string('method_type', 45)->nullable();
             $table->string('remarks', 200)->nullable()->index();
-            $table->json('meta')->nullable();
+            $table->jsonb('meta')->nullable();
             $table->dateTime('created_at')->nullable();
 
             $table->index(['method_id', 'method_type']);

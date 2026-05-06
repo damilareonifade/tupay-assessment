@@ -2,9 +2,6 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\App;
-use Illuminate\Support\Traits\Macroable;
 use App\Models\Traits\TransactionRelations;
 use App\Models\Traits\WorkWithMeta;
 use App\WalletModule\Internals\Actions\ActionManager;
@@ -12,29 +9,38 @@ use App\WalletModule\Money\Currency;
 use App\WalletModule\Money\Money;
 use App\WalletModule\Traits\ConditionalID;
 use App\WalletModule\WalletableManager;
+use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\App;
+use Illuminate\Support\Traits\Macroable;
 
 /**
- * @property-read \App\WalletModule\Money\Money $balance
- * @property-read \App\WalletModule\Money\Money $amount
- * @property-read \App\WalletModule\Money\Currency $currency
- * @property-read \App\WalletModule\Internals\Actions\ActionManager $action
+ * @property-read Money $balance
+ * @property-read Money $amount
+ * @property-read Currency $currency
+ * @property-read ActionManager $action
  * @property-read string $title
  * @property-read string $image
  * @property-read string $remarks
  */
 class Transaction extends Model
 {
-    use ConditionalID;
+    use HasUlids;
     use TransactionRelations;
     use WorkWithMeta;
-    use Macroable {
-        __call as macroCall;
-        __callStatic as macroCallStatic;
-    }
 
     public $timestamps = false;
 
     protected $transactionCache = [];
+
+    protected function casts(): array
+    {
+        return [
+            'meta' => 'array',
+            'confirmed' => 'boolean',
+            'confirmed_at' => 'datetime',
+        ];
+    }
 
     public function getAmountAttribute(): Money
     {

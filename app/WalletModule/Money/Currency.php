@@ -62,21 +62,16 @@ class Currency implements \JsonSerializable
     private $numeric;
 
     /**
-     * @param string $code
-     * @param string $symbol
-     * @param string $name
-     * @param string $subunit
-     * @param int $per = null
-     * @param int $number = null
-     *
+     * @param  int  $per  = null
+     * @param  int  $number  = null
      */
     public function __construct(
         string $code,
         string $symbol,
         string $name,
         string $subunit,
-        int $per = null,
-        int $numeric = null
+        ?int $per = null,
+        ?int $numeric = null
     ) {
         if ($code === '') {
             throw new \InvalidArgumentException('Currency code should not be empty string');
@@ -93,22 +88,16 @@ class Currency implements \JsonSerializable
     /**
      * Create a new currency object
      *
-     * @param string $code
-     * @param string $symbol
-     * @param string $name
-     * @param string $subunit
-     * @param int $per = null
-     * @param int $number = null
-     *
-     * @return self
+     * @param  int  $per  = null
+     * @param  int  $number  = null
      */
     public static function new(
         string $code,
         string $symbol,
         string $name,
         string $subunit,
-        int $per = null,
-        int $numeric = null
+        ?int $per = null,
+        ?int $numeric = null
     ): self {
         return new static($code, $symbol, $name, $subunit, $per, $numeric);
     }
@@ -224,7 +213,7 @@ class Currency implements \JsonSerializable
      */
     public function subunitLength()
     {
-        return strlen(substr((string)$this->per, 1));
+        return strlen(substr((string) $this->per, 1));
     }
 
     /**

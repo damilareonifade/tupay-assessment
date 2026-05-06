@@ -21,7 +21,7 @@ class CreateWalletsTable extends Migration
     public function up()
     {
         Schema::create($this->tableName, function (Blueprint $table) {
-            $table->id();
+            $table->ulid('id')->primary();
             $table->string('walletable_id', 100);
             $table->string('walletable_type', 45);
             $table->string('label', 45);
@@ -29,10 +29,11 @@ class CreateWalletsTable extends Migration
             $table->unsignedBigInteger('amount');
             $table->string('currency', 10);
             $table->enum('status', ['active', 'blocked'])->default('active')->index();
-            $table->json('meta')->nullable();
+            $table->jsonb('meta')->nullable();
             $table->timestamps();
 
             $table->index(['walletable_id', 'walletable_type']);
+            $table->index('currency');
         });
     }
 

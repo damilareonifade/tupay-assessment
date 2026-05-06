@@ -35,4 +35,6 @@ return [
         ],
     ],
 
+    'webhook_secret' => env('WEBHOOK_SECRET', 'tupay-webhook-secret-key'),
+
 ];

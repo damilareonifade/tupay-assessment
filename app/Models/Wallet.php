@@ -2,52 +2,56 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\App;
-use Illuminate\Support\Traits\Macroable;
-use InvalidArgumentException;
 use App\Models\Traits\WalletRelations;
 use App\Models\Traits\WorkWithMeta;
 use App\WalletModule\Contracts\WalletInterface;
+use App\WalletModule\Exceptions\InvalidArgumentException;
 use App\WalletModule\Facades\Mutator;
 use App\WalletModule\Facades\Walletable;
 use App\WalletModule\Internals\Actions\Action;
 use App\WalletModule\Internals\Mutation\System\WalletBalanceMutation;
+use App\WalletModule\Money\Currency;
 use App\WalletModule\Money\Money;
+use App\WalletModule\Traits\ConditionalID;
 use App\WalletModule\Transaction\Confirmation;
 use App\WalletModule\Transaction\CreditDebit;
-use App\WalletModule\Transaction\TransactionBag;
 use App\WalletModule\Transaction\Transfer;
 use App\WalletModule\Transaction\UnconfirmedCreditDebit;
-use App\WalletModule\Traits\ConditionalID;
 use App\WalletModule\WalletableManager;
-use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\App;
+use Illuminate\Support\Traits\Macroable;
 
 /**
- * @property-read \App\WalletModule\Money\Money $balance
- * @property \App\WalletModule\Money\Money $amount
- * @property-read \App\WalletModule\Money\Currency $currency
+ * @property-read Money $balance
+ * @property Money $amount
+ * @property-read Currency $currency
  */
 class Wallet extends Model implements WalletInterface
 {
-    use ConditionalID;
+    use HasUlids;
     use WalletRelations;
     use WorkWithMeta;
-    use Macroable {
-        __call as macroCall;
-        __callStatic as macroCallStatic;
-    }
 
     /**
      * Hold object for the wallet
+     *
      * @var array
      */
     protected $instanceCache = [];
 
+    protected function casts(): array
+    {
+        return [
+            'meta' => 'array',
+        ];
+    }
+
     /**
      * Get the real balance object of a wallet
      *
-     * @return \Walletable\Money\Money
+     * @return Money
      */
     public function getAmountAttribute($value)
     {
@@ -59,19 +63,17 @@ class Wallet extends Model implements WalletInterface
 
     /**
      * Get the real balance object of a wallet
-     *
-     * @return \Walletable\Money\Money
      */
-    public function getBalanceAttribute()
+    public function getBalanceAttribute(): Money
     {
         return Mutator::mutate(new WalletBalanceMutation(
             'wallet.balance',
             new Money(
-                $this->getRawOriginal('amount'),
+                $this->attributes['amount'] ?? $this->getRawOriginal('amount') ?? 0,
                 $this->currency
             ),
             [
-                'wallet' => $this
+                'wallet' => $this,
             ]
         ))->value();
     }
@@ -79,17 +81,15 @@ class Wallet extends Model implements WalletInterface
     /**
      * Get the currency object of the wallet
      *
-     * @return \Walletable\Money\Currency
+     * @return Currency
      */
     public function getCurrencyAttribute()
     {
-        return Money::currency($this->getRawOriginal('currency'));
+        return Money::currency($this->attributes['currency'] ?? $this->getRawOriginal('currency'));
     }
 
     /**
      * Check if this wallet is compactible with another wallet
-     *
-     * @param self $wallet
      */
     public function compactible(self $wallet): bool
     {
@@ -99,11 +99,9 @@ class Wallet extends Model implements WalletInterface
     /**
      * Transfer money to another wallet
      *
-     * @param self $wallet
-     * @param int|\Walletable\Money\Money $amount
-     * @param string|null $remarks
+     * @param  int|Money  $amount
      */
-    public function transfer(self $wallet, $amount, string|null $remarks = null): Transfer
+    public function transfer(self $wallet, $amount, ?string $remarks = null): Transfer
     {
         if (!is_int($amount) && !($amount instanceof Money)) {
             throw new InvalidArgumentException('Argument 2 must be of type ' . Money::class . ' or Integer');
@@ -119,7 +117,7 @@ class Wallet extends Model implements WalletInterface
     /**
      * Confirmation
      *
-     * @param int|\Walletable\Models\Transaction $amount
+     * @param  int|Transaction  $amount
      */
     public function confirm(Transaction $transaction): Confirmation
     {
@@ -133,11 +131,9 @@ class Wallet extends Model implements WalletInterface
     /**
      * Unconfirmed Credit the wallet
      *
-     * @param int|\Walletable\Money\Money $amount
-     * @param string|null $title
-     * @param string|null $remarks
+     * @param  int|Money  $amount
      */
-    public function unconfirmedCredit($amount, string|null $title = null, string|null $remarks = null): UnconfirmedCreditDebit
+    public function unconfirmedCredit($amount, ?string $title = null, ?string $remarks = null): UnconfirmedCreditDebit
     {
         if (!is_int($amount) && !($amount instanceof Money)) {
             throw new InvalidArgumentException('Argument 1 must be of type ' . Money::class . ' or Integer');
@@ -153,11 +149,9 @@ class Wallet extends Model implements WalletInterface
     /**
      * Unconfirmed Debit the wallet
      *
-     * @param int|\Walletable\Money\Money $amount
-     * @param string|null $title
-     * @param string|null $remarks
+     * @param  int|Money  $amount
      */
-    public function unconfirmedDebit($amount, string|null $title = null, string|null $remarks = null): UnconfirmedCreditDebit
+    public function unconfirmedDebit($amount, ?string $title = null, ?string $remarks = null): UnconfirmedCreditDebit
     {
         if (!is_int($amount) && !($amount instanceof Money)) {
             throw new InvalidArgumentException('Argument 1 must be of type ' . Money::class . ' or Integer');
@@ -173,11 +167,9 @@ class Wallet extends Model implements WalletInterface
     /**
      * Credit the wallet
      *
-     * @param int|\Walletable\Money\Money $amount
-     * @param string|null $title
-     * @param string|null $remarks
+     * @param  int|Money  $amount
      */
-    public function credit($amount, string|null $title = null, string|null $remarks = null): CreditDebit
+    public function credit($amount, ?string $title = null, ?string $remarks = null): CreditDebit
     {
         if (!is_int($amount) && !($amount instanceof Money)) {
             throw new InvalidArgumentException('Argument 1 must be of type ' . Money::class . ' or Integer');
@@ -193,11 +185,9 @@ class Wallet extends Model implements WalletInterface
     /**
      * Debit the wallet
      *
-     * @param int|\Walletable\Money\Money $amount
-     * @param string|null $title
-     * @param string|null $remarks
+     * @param  int|Money  $amount
      */
-    public function debit($amount, string|null $title = null, string|null $remarks = null): CreditDebit
+    public function debit($amount, ?string $title = null, ?string $remarks = null): CreditDebit
     {
         if (!is_int($amount) && !($amount instanceof Money)) {
             throw new InvalidArgumentException('Argument 1 must be of type ' . Money::class . ' or Integer');
@@ -213,9 +203,8 @@ class Wallet extends Model implements WalletInterface
     /**
      * Return money object of thesame currency
      *
-     * @param int $amount
      *
-     * @return \Walletable\Money\Money
+     * @return Money
      */
     public function money(int $amount)
     {
@@ -228,8 +217,7 @@ class Wallet extends Model implements WalletInterface
     /**
      * Create action for the wallet
      *
-     * @param string $action the name of the action
-     * @return \Walletable\Internals\Actions\Action
+     * @param  string  $action  the name of the action
      */
     public function action(string $action): Action
     {

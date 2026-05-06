@@ -1,0 +1,647 @@
+{
+  "info": {
+    "_postman_id": "tupay-ledger-settlement-engine",
+    "name": "Tupay — Ledger & Settlement Engine",
+    "description": "Complete API collection for the Tupay cross-border NGN/CNY remittance service.\n\n**Test credentials (from seeder)**\n- Email: test@example.com\n- Password: password\n- 2FA: Use an authenticator app with the secret printed by `php artisan db:seed`\n\n**Flow**\n1. Login → copy `auth_token` (auto-saved)\n2. POST /2fa/verify with your TOTP code → token is upgraded automatically\n3. All other endpoints use `{{auth_token}}`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "Base URL. Change port if you run `php artisan serve --port=XXXX`."
+    },
+    {
+      "key": "auth_token",
+      "value": "",
+      "type": "string",
+      "description": "Sanctum bearer token. Auto-populated by the Login and 2FA Verify requests."
+    },
+    {
+      "key": "webhook_secret",
+      "value": "tupay-webhook-secret-key",
+      "type": "string",
+      "description": "Shared HMAC secret. Must match WEBHOOK_SECRET in .env (services.webhook_secret)."
+    },
+    {
+      "key": "webhook_signature",
+      "value": "",
+      "type": "string",
+      "description": "Computed by the webhook pre-request script. Do not edit manually."
+    },
+    {
+      "key": "ngn_wallet_id",
+      "value": "1",
+      "type": "string",
+      "description": "NGN wallet ID of the seeded test user."
+    },
+    {
+      "key": "cny_wallet_id",
+      "value": "3",
+      "type": "string",
+      "description": "CNY wallet ID of the seeded test user."
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "description": "Login, logout, and profile endpoints. Rate-limited to 5 req/min.",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"password\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "login"]
+            },
+            "description": "Returns a Sanctum `basic` token. If `two_factor_required` is true, call POST /2fa/verify next to upgrade the token to `basic + 2fa`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.token) {",
+                  "    pm.collectionVariables.set('auth_token', res.data.token);",
+                  "    console.log('auth_token saved:', res.data.token.substring(0, 20) + '...');",
+                  "}",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Token returned', () => pm.expect(res.data.token).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Profile (me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/me",
+              "host": ["{{base_url}}"],
+              "path": ["api", "me"]
+            },
+            "description": "Returns the authenticated user's profile."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('User id present', () => pm.expect(pm.response.json().data.id).to.exist);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/logout",
+              "host": ["{{base_url}}"],
+              "path": ["api", "logout"]
+            },
+            "description": "Revokes the current access token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('auth_token', '');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Two-Factor Authentication (2FA)",
+      "description": "TOTP-based 2FA flow. After login, verify your TOTP code to get an elevated token with the `2fa` ability — required for /swap.",
+      "item": [
+        {
+          "name": "Setup 2FA (generate secret & QR)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/2fa/setup",
+              "host": ["{{base_url}}"],
+              "path": ["api", "2fa", "setup"]
+            },
+            "description": "Generates a new TOTP secret and QR code URL. Scan the QR in your authenticator app, then call /2fa/enable to confirm setup."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Secret returned', () => pm.expect(res.data.secret).to.be.a('string'));",
+                  "if (res.data.secret) console.log('TOTP Secret:', res.data.secret);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Enable 2FA (confirm setup)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"123456\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/2fa/enable",
+              "host": ["{{base_url}}"],
+              "path": ["api", "2fa", "enable"]
+            },
+            "description": "Confirms 2FA setup by verifying one TOTP code. Only needed once per user. The seeded test user already has 2FA enabled."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify 2FA (upgrade token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"123456\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/2fa/verify",
+              "host": ["{{base_url}}"],
+              "path": ["api", "2fa", "verify"]
+            },
+            "description": "Verifies the TOTP code, revokes the `basic` token, and issues a new `basic + 2fa` token. The upgraded token is required for POST /swap. Replace `code` with your live TOTP from the authenticator app."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.token) {",
+                  "    pm.collectionVariables.set('auth_token', res.data.token);",
+                  "    console.log('2FA token saved. Swap is now unlocked.');",
+                  "}",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('2FA token returned', () => pm.expect(res.data.token).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Wallets",
+      "description": "Wallet balance endpoints.",
+      "item": [
+        {
+          "name": "List Wallets",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/wallets",
+              "host": ["{{base_url}}"],
+              "path": ["api", "wallets"]
+            },
+            "description": "Returns all wallets for the authenticated user with balance in display units and raw subunits (kobo / fen)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const wallets = pm.response.json().data;",
+                  "pm.test('Returns array of wallets', () => pm.expect(wallets).to.be.an('array'));",
+                  "const ngn = wallets.find(w => w.currency === 'NGN');",
+                  "const cny = wallets.find(w => w.currency === 'CNY');",
+                  "if (ngn) pm.collectionVariables.set('ngn_wallet_id', String(ngn.id));",
+                  "if (cny) pm.collectionVariables.set('cny_wallet_id', String(cny.id));",
+                  "console.log('NGN wallet id:', ngn?.id, '| CNY wallet id:', cny?.id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ledger",
+      "description": "Paginated transaction history per wallet.",
+      "item": [
+        {
+          "name": "NGN Wallet Ledger",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ledger/{{ngn_wallet_id}}?per_page=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ledger", "{{ngn_wallet_id}}"],
+              "query": [{ "key": "per_page", "value": "20" }]
+            },
+            "description": "Returns paginated transactions for the NGN wallet. Only the wallet owner can access this."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Pagination meta present', () => pm.expect(res.data.meta.total).to.be.a('number'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CNY Wallet Ledger",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ledger/{{cny_wallet_id}}?per_page=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ledger", "{{cny_wallet_id}}"],
+              "query": [{ "key": "per_page", "value": "20" }]
+            },
+            "description": "Returns paginated transactions for the CNY wallet."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ledger — Unauthorized (different wallet)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/ledger/9999",
+              "host": ["{{base_url}}"],
+              "path": ["api", "ledger", "9999"]
+            },
+            "description": "Should return 404 — wallet does not belong to the authenticated user."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Currency Swap",
+      "description": "Requires an upgraded 2FA token (ability: `2fa`). Complete the 2FA Verify step first.",
+      "item": [
+        {
+          "name": "Swap NGN → CNY",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{auth_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 100000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/swap",
+              "host": ["{{base_url}}"],
+              "path": ["api", "swap"]
+            },
+            "description": "Exchanges NGN for CNY.\n\n`amount` is in **kobo** (NGN subunits). 100000 kobo = 1,000 NGN.\n\nRate: 1 NGN = 0.0045 CNY, so 1,000 NGN → 4 CNY (450 fen).\n\n**Requires 2FA token.** Will return 403 if the `basic`-only token from Login is used."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('from_currency is NGN', () => pm.expect(res.data.from_currency).to.equal('NGN'));",
+                  "pm.test('to_currency is CNY', () => pm.expect(res.data.to_currency).to.equal('CNY'));",
+                  "console.log('Debited (kobo):', res.data.debited_kobo, '| Credited (fen):', res.data.credited_fen, '| Rate:', res.data.rate);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Swap — No 2FA token (expect 403)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer BASIC_TOKEN_ONLY" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 100000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/swap",
+              "host": ["{{base_url}}"],
+              "path": ["api", "swap"]
+            },
+            "description": "Demonstrates that a `basic`-only token is rejected by the RequiresTwoFactor middleware. Replace the Authorization header with a token that has NOT been through /2fa/verify."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "description": "Settlement partner webhooks. Signature is computed automatically by the pre-request script using HMAC-SHA256 with the shared secret.",
+      "item": [
+        {
+          "name": "Settlement — Success (existing session)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Webhook-Signature", "value": "{{webhook_signature}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider_reference\": \"SETTLE_REF_001\",\n  \"transaction_session\": \"replace-with-a-real-session-uuid\",\n  \"status\": \"success\",\n  \"amount\": 45000,\n  \"currency\": \"CNY\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/settlement",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "settlement"]
+            },
+            "description": "Confirms a previously initiated payout. Replace `transaction_session` with a real session UUID from the ledger.\n\nThe `X-Webhook-Signature` header is auto-computed by the pre-request script."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Compute HMAC-SHA256 signature over the raw request body.",
+                  "// Matches SettlementWebhookDriver::validate() — 'sha256=' + hmac(body, secret).",
+                  "const secret = pm.collectionVariables.get('webhook_secret');",
+                  "const body = pm.request.body.raw;",
+                  "const signature = 'sha256=' + CryptoJS.HmacSHA256(body, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.collectionVariables.set('webhook_signature', signature);",
+                  "console.log('Computed signature:', signature);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Status is queued or received', () => {",
+                  "    pm.expect(['queued', 'received']).to.include(res.status);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Settlement — Mock (no prior session, creates transaction)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Webhook-Signature", "value": "{{webhook_signature}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider_reference\": \"SETTLE_MOCK_001\",\n  \"transaction_session\": \"non-existent-session-uuid\",\n  \"status\": \"success\",\n  \"amount\": 45000,\n  \"currency\": \"CNY\",\n  \"wallet_id\": \"{{cny_wallet_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/settlement",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "settlement"]
+            },
+            "description": "Demonstrates the mock path: no prior transaction found by session, so a new credit transaction is created on the specified `wallet_id`.\n\nRequires `wallet_id` (ULID or integer) and `amount` (subunits) in the payload."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.collectionVariables.get('webhook_secret');",
+                  "const body = pm.request.body.raw;",
+                  "const signature = 'sha256=' + CryptoJS.HmacSHA256(body, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.collectionVariables.set('webhook_signature', signature);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Settlement — Duplicate (idempotency check)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Webhook-Signature", "value": "{{webhook_signature}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider_reference\": \"SETTLE_MOCK_001\",\n  \"transaction_session\": \"non-existent-session-uuid\",\n  \"status\": \"success\",\n  \"amount\": 45000,\n  \"currency\": \"CNY\",\n  \"wallet_id\": \"{{cny_wallet_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/settlement",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "settlement"]
+            },
+            "description": "Send the same `provider_reference` again. The driver returns `{status: 'received', message: 'Already processed.'}` without dispatching a second job — idempotency in action."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.collectionVariables.get('webhook_secret');",
+                  "const body = pm.request.body.raw;",
+                  "const signature = 'sha256=' + CryptoJS.HmacSHA256(body, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.collectionVariables.set('webhook_signature', signature);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Idempotent — already received', () => {",
+                  "    pm.expect(pm.response.json().status).to.equal('received');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Settlement — Bad Signature (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Webhook-Signature", "value": "sha256=invalidsignature" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider_reference\": \"SETTLE_BAD_001\",\n  \"transaction_session\": \"some-uuid\",\n  \"status\": \"success\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/webhooks/settlement",
+              "host": ["{{base_url}}"],
+              "path": ["api", "webhooks", "settlement"]
+            },
+            "description": "Sends an incorrect signature. `SettlementWebhookDriver::validate()` returns false, and `WebhookManager` responds with 400."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400 — bad signature rejected', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
